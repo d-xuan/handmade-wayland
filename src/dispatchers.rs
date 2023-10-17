@@ -1,0 +1,11 @@
+pub mod wl_buffer;
+pub mod wl_compositor;
+pub mod wl_keyboard;
+pub mod wl_registry;
+pub mod wl_seat;
+pub mod wl_shm;
+pub mod wl_shm_pool;
+pub mod wl_surface;
+pub mod xdg_surface;
+pub mod xdg_toplevel;
+pub mod xdg_wm_base;
