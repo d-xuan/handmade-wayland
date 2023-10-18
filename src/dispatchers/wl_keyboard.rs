@@ -19,7 +19,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
                 state,
             } => {
                 if let WEnum::Value(wl_keyboard::KeyState::Pressed) = state {
-                    if key == 0x18 {
+                    if key == 16 {
                         // Q on qwerty
                         app_state.running = false;
                     }

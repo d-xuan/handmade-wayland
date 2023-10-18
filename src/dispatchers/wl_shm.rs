@@ -14,6 +14,6 @@ impl Dispatch<wl_shm::WlShm, ()> for State {
         _qh: &QueueHandle<State>,
     ) {
         // WlShm events provide information about supported events.
-        // We'll only deal with argb8888 for now.
+        // We'll only deal with xrgb8888 for now.
     }
 }
