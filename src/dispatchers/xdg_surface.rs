@@ -1,7 +1,7 @@
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols::xdg::shell::client::xdg_surface;
 
-use crate::draw_frame;
+use crate::frame_draw;
 use crate::State;
 
 impl Dispatch<xdg_surface::XdgSurface, ()> for State {
@@ -17,7 +17,7 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for State {
             eprintln!("received xdg_surface_configure");
             surface.ack_configure(serial);
 
-            draw_frame(state, &qh);
+            frame_draw(state, &qh);
             state.surface.as_ref().unwrap().commit();
         }
     }

@@ -13,10 +13,20 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for State {
         _conn: &Connection,
         _qh: &QueueHandle<State>,
     ) {
-        //TODO(wednesday): implement other events
         match event {
             xdg_toplevel::Event::Close => {
                 state.running = false;
+            }
+            xdg_toplevel::Event::Configure {
+                width,
+                height,
+                states: _,
+            } => {
+                if width != 0 && height != 0 {
+                    // width = height = 0 means we get to decide the size
+                    state.width = width;
+                    state.height = height;
+                }
             }
             _ => {}
         }

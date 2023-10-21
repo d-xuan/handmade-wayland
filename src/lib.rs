@@ -1,5 +1,6 @@
 use std::{fs::File, os::fd::AsFd};
 
+use dispatchers::wl_keyboard::KeyState;
 use wayland_client::Connection;
 use wayland_client::{
     protocol::{
@@ -12,24 +13,34 @@ use wayland_client::{
 use wayland_protocols::xdg::shell::client::xdg_surface;
 use wayland_protocols::xdg::shell::client::xdg_toplevel;
 use wayland_protocols::xdg::shell::client::xdg_wm_base;
+use xkbcommon::xkb;
 
 mod dispatchers;
 mod shm;
 
 struct State {
+    // Wayland
     shm: Option<wl_shm::WlShm>,
     seat: Option<wl_seat::WlSeat>,
     compositor: Option<wl_compositor::WlCompositor>,
     xdg_wm_base: Option<xdg_wm_base::XdgWmBase>,
     surface: Option<wl_surface::WlSurface>,
+    // Xdg
     xdg_surface: Option<xdg_surface::XdgSurface>,
     xdg_toplevel: Option<xdg_toplevel::XdgToplevel>,
+    // Backbuffer
     data: Option<memmap::MmapMut>,
     width: i32,
     height: i32,
     bytes_per_pixel: i32,
     pool: Option<wl_shm_pool::WlShmPool>,
+    // Application
     offset: u8,
+    // XKB
+    xkb_state: Option<xkb::State>,
+    xkb_context: Option<xkb::Context>,
+    xkb_keymap: Option<xkb::Keymap>,
+    keystate: KeyState,
     running: bool,
 }
 
@@ -49,7 +60,11 @@ impl State {
             height,
             width,
             offset: 0,
+            xkb_state: None,
+            xkb_context: None,
+            xkb_keymap: None,
             bytes_per_pixel: BYTES_PER_PIXEL,
+            keystate: KeyState::new(),
             running: true,
         }
     }
@@ -123,7 +138,7 @@ pub fn run(width: i32, height: i32) {
     }
 }
 
-fn draw_frame(state: &mut State, qh: &QueueHandle<State>) {
+fn frame_draw(state: &mut State, qh: &QueueHandle<State>) {
     let height = state.height;
     let width = state.width;
     let offset = state.offset;
@@ -134,7 +149,6 @@ fn draw_frame(state: &mut State, qh: &QueueHandle<State>) {
     // Draw checkboxed background
     // TODO: Create ARGB structs to better encapsulate this
     // Look into the byteorder crate
-    // state.offset += 1;
     for y in 0..height as usize {
         for x in 0..width as usize {
             let pixel = y * stride as usize + x * bytes_per_pixel as usize;

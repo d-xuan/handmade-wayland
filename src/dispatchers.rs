@@ -2,6 +2,7 @@ pub mod wl_buffer;
 pub mod wl_callback;
 pub mod wl_compositor;
 pub mod wl_keyboard;
+pub mod wl_pointer;
 pub mod wl_registry;
 pub mod wl_seat;
 pub mod wl_shm;
