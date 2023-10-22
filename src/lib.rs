@@ -1,182 +1,124 @@
-use std::{fs::File, os::fd::AsFd};
+use std::{cmp::max, f32::consts::PI};
 
-use dispatchers::wl_keyboard::KeyState;
-use wayland_client::Connection;
-use wayland_client::{
-    protocol::{
-        wl_compositor, wl_seat,
-        wl_shm::{self},
-        wl_shm_pool, wl_surface,
-    },
-    QueueHandle,
-};
-use wayland_protocols::xdg::shell::client::xdg_surface;
-use wayland_protocols::xdg::shell::client::xdg_toplevel;
-use wayland_protocols::xdg::shell::client::xdg_wm_base;
-use xkbcommon::xkb;
-
-mod dispatchers;
-mod shm;
-
-struct State {
-    // Wayland
-    shm: Option<wl_shm::WlShm>,
-    seat: Option<wl_seat::WlSeat>,
-    compositor: Option<wl_compositor::WlCompositor>,
-    xdg_wm_base: Option<xdg_wm_base::XdgWmBase>,
-    surface: Option<wl_surface::WlSurface>,
-    // Xdg
-    xdg_surface: Option<xdg_surface::XdgSurface>,
-    xdg_toplevel: Option<xdg_toplevel::XdgToplevel>,
-    // Backbuffer
-    data: Option<memmap::MmapMut>,
-    width: i32,
-    height: i32,
-    bytes_per_pixel: i32,
-    pool: Option<wl_shm_pool::WlShmPool>,
-    // Application
-    offset: u8,
-    // XKB
-    xkb_state: Option<xkb::State>,
-    xkb_context: Option<xkb::Context>,
-    xkb_keymap: Option<xkb::Keymap>,
-    keystate: KeyState,
-    running: bool,
+pub struct Game {
+    x_offset: u8,
+    y_offset: u8,
+    pitch_offset: i32,
+    sample_index: f32, // TODO: Sync with period issues
 }
 
-const BYTES_PER_PIXEL: i32 = 4;
-impl State {
-    fn new(width: i32, height: i32) -> State {
-        State {
-            shm: None,
-            seat: None,
-            compositor: None,
-            xdg_wm_base: None,
-            surface: None,
-            xdg_surface: None,
-            xdg_toplevel: None,
-            pool: None,
-            data: None,
-            height,
-            width,
-            offset: 0,
-            xkb_state: None,
-            xkb_context: None,
-            xkb_keymap: None,
-            bytes_per_pixel: BYTES_PER_PIXEL,
-            keystate: KeyState::new(),
-            running: true,
+pub struct PixelBuffer<'a> {
+    pub data: &'a mut [u8],
+    pub height: i32,
+    pub width: i32,
+    pub stride: i32,
+}
+
+pub struct SoundBuffer {
+    pub data: Vec<u8>,
+    pub bytes_per_sample: usize,
+    pub sample_rate: u32,
+    pub num_channels: u8,
+}
+pub struct KeyState {
+    pub up: bool,
+    pub left: bool,
+    pub right: bool,
+    pub down: bool,
+}
+
+impl KeyState {
+    pub fn new() -> Self {
+        KeyState {
+            up: false,
+            left: false,
+            right: false,
+            down: false,
         }
     }
 }
 
-pub fn run(width: i32, height: i32) {
-    // Initialise program state
-    let mut state = State::new(width, height);
-
-    // Create a Wayland connection object from the connection.
-    let conn = Connection::connect_to_env().expect("initial connection to wayland should succeed");
-
-    // Retrive the WlDisplay wayland object from the connection.
-    let display = conn.display();
-
-    // Create an event queue for event processing
-    // All responses from the server will come through this queue.
-    let mut event_queue = conn.new_event_queue();
-
-    // And get its handle to associate new object to it.
-    let qh = event_queue.handle();
-
-    // Create a wl_registry object by sending a wl_display_get_registry request
-    display.get_registry(&qh, ());
-    event_queue
-        .roundtrip(&mut state)
-        .expect("initial roundtrip should succeed");
-
-    // Ask the compositor for a surface
-    state.surface = Some(state.compositor.as_ref().unwrap().create_surface(&qh, ()));
-
-    // Convert the surface into an xdg_surface for desktop applications
-    state.xdg_surface = Some(state.xdg_wm_base.as_ref().unwrap().get_xdg_surface(
-        state.surface.as_ref().unwrap(),
-        &qh,
-        (),
-    ));
-
-    // Assign our xdg_surface the top-level role for a full-fledged desktop window
-    state.xdg_toplevel = Some(state.xdg_surface.as_ref().unwrap().get_toplevel(&qh, ()));
-
-    // Set XDG window title
-    state
-        .xdg_toplevel
-        .as_ref()
-        .unwrap()
-        .set_title("Handmade Hero".to_string());
-
-    // draw frame
-    let stride: i32 = width * BYTES_PER_PIXEL;
-    let size = height * stride;
-    let fd = shm::allocate_shm_file(size).expect("should be able to allocate shared memory");
-    let file = File::from(fd);
-
-    state.data = Some(unsafe { memmap::MmapOptions::new().map_mut(&file).unwrap() });
-
-    state.pool = Some(state.shm.as_ref().unwrap().create_pool(
-        file.as_fd(),
-        size.try_into().unwrap(),
-        &qh,
-        (),
-    ));
-
-    // draw_frame(&mut state, &qh);
-    state.surface.as_ref().unwrap().commit();
-    state.surface.as_ref().unwrap().frame(&qh, ());
-
-    // Main loop
-    while state.running {
-        event_queue.blocking_dispatch(&mut state).unwrap();
-    }
-}
-
-fn frame_draw(state: &mut State, qh: &QueueHandle<State>) {
-    let height = state.height;
-    let width = state.width;
-    let offset = state.offset;
-    let bytes_per_pixel = state.bytes_per_pixel;
-    let data = state.data.as_mut().unwrap();
-    let stride = width * bytes_per_pixel;
-
-    // Draw checkboxed background
-    // TODO: Create ARGB structs to better encapsulate this
-    // Look into the byteorder crate
-    for y in 0..height as usize {
-        for x in 0..width as usize {
-            let pixel = y * stride as usize + x * bytes_per_pixel as usize;
-            data[pixel] = offset.wrapping_add(x as u8);
-            data[pixel + 1] = offset.wrapping_add(y as u8);
-            data[pixel + 2] = 0x00;
+impl Game {
+    pub fn new() -> Game {
+        Game {
+            x_offset: 0,
+            y_offset: 0,
+            pitch_offset: 0,
+            sample_index: 0.0,
         }
     }
 
-    let buffer = Some(state.pool.as_ref().unwrap().create_buffer(
-        0,
-        width,
-        height,
-        stride,
-        wl_shm::Format::Xrgb8888,
-        &qh,
-        (),
-    ));
+    pub fn update_and_render(self: &mut Self, pixel_buffer: &mut PixelBuffer, keystate: &KeyState) {
+        // Update offset on each timestep
+        if keystate.left {
+            self.x_offset = self.x_offset.wrapping_sub(25);
+            if self.pitch_offset > -250 {
+                self.pitch_offset -= 1;
+            }
+        } else if keystate.right {
+            self.x_offset = self.x_offset.wrapping_add(25);
+            if self.pitch_offset < 250 {
+                self.pitch_offset += 1;
+            }
+        }
 
-    state
-        .surface
-        .as_ref()
-        .unwrap()
-        .attach(buffer.as_ref(), 0, 0);
+        if keystate.up {
+            self.y_offset = self.y_offset.wrapping_sub(25);
+            if self.pitch_offset < 250 {
+                self.pitch_offset += 1;
+            }
+        } else if keystate.down {
+            self.y_offset = self.y_offset.wrapping_add(25);
+            if self.pitch_offset > -250 {
+                self.pitch_offset -= 1;
+            }
+        }
 
-    state
-        .surface
-        .as_ref()
-        .unwrap()
-        .damage_buffer(0, 0, state.width, state.height);
+        self.render(pixel_buffer);
+    }
+
+    fn render(self: &mut Self, pixel_buffer: &mut PixelBuffer) {
+        let height = pixel_buffer.height;
+        let width = pixel_buffer.width;
+        let stride = pixel_buffer.stride;
+        let bytes_per_pixel = pixel_buffer.stride / pixel_buffer.width;
+
+        for y in 0..height {
+            for x in 0..width {
+                let pixel = (y * stride + x * bytes_per_pixel) as usize;
+                pixel_buffer.data[pixel] = self // B
+                    .x_offset
+                    .wrapping_add(x as u8);
+                pixel_buffer.data[pixel + 1] = self.y_offset.wrapping_add(y as u8);
+                pixel_buffer.data[pixel + 2] = 0x00; // R
+            }
+        }
+    }
+
+    pub fn play_sound(self: &mut Self, sound_buffer: &mut SoundBuffer) {
+        let tone_hz = 500.0 + self.pitch_offset as f32;
+        let amplitude = 0.7;
+        let length = sound_buffer.data.len();
+        let channels = sound_buffer.num_channels;
+        let sample_rate_f = sound_buffer.sample_rate as f32;
+
+        // y = sin(kt)
+        let k = 2.0 * tone_hz * PI;
+        let mut t = self.sample_index / sample_rate_f;
+        let mut y = amplitude * f32::sin(k * t);
+
+        let mut i = 0;
+        while i < length {
+            let y_bytes = y.to_ne_bytes();
+            for _channel in 0..channels {
+                for b in y_bytes {
+                    sound_buffer.data[i] = b;
+                    i += 1;
+                }
+            }
+            self.sample_index += 1.0;
+            t = self.sample_index / sample_rate_f;
+            y = amplitude * f32::sin(k * t);
+        }
+    }
 }
